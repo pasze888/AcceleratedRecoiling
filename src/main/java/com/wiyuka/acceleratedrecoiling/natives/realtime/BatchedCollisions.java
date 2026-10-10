@@ -1,7 +1,5 @@
 package com.wiyuka.acceleratedrecoiling.natives.realtime;
 
-import com.wiyuka.acceleratedrecoiling.mixin.BatchedLevelAccess;
-import com.wiyuka.acceleratedrecoiling.mixin.LivingEntityDoPushInvoker;
 import com.wiyuka.acceleratedrecoiling.mixin.RealtimeGetterAccess;
 import com.wiyuka.acceleratedrecoiling.natives.realtime.compat.BatchedRules;
 import com.wiyuka.acceleratedrecoiling.natives.realtime.index.IndexedEntity;
@@ -22,6 +20,7 @@ import net.minecraft.world.level.entity.EntitySectionStorage;
 import net.minecraft.world.level.entity.LevelEntityGetterAdapter;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import net.neoforged.neoforge.common.NeoForgeConfig;
 
 public final class BatchedCollisions {
     private static final int SECTION_ADDRESS_OFFSET = 0;
@@ -89,9 +88,9 @@ public final class BatchedCollisions {
         }
         ServerLevel level = (ServerLevel) source.level();
 
-        if (!((BatchedLevelAccess) level).ar$dragonParts().isEmpty()) return false;
+        if (!level.getPartEntities().isEmpty()) return false;
 
-        var getter = ((BatchedLevelAccess) level).ar$entities();
+        var getter = level.getEntities();
 
         if (getter.getClass() != LevelEntityGetterAdapter.class) return false;
         var access = (RealtimeGetterAccess<Entity>) getter;
@@ -117,10 +116,10 @@ public final class BatchedCollisions {
         }
 
         ServerLevel level = (ServerLevel) source.level();
-        if (!((BatchedLevelAccess) level).ar$dragonParts().isEmpty()) {
+        if (!level.getPartEntities().isEmpty()) {
             return false;
         }
-        var getter = ((BatchedLevelAccess) level).ar$entities();
+        var getter = level.getEntities();
         if (getter.getClass() != LevelEntityGetterAdapter.class) return false;
         var access = (RealtimeGetterAccess<Entity>) getter;
 
@@ -149,6 +148,7 @@ public final class BatchedCollisions {
 
     private static boolean canPush(LivingEntity source) {
         return source.level().getClass() == ServerLevel.class
+                && !NeoForgeConfig.SERVER.fullBoundingBoxLadders.get()
                 && BatchedRules.classify(source, true) == BatchedRules.PUSHABLE;
     }
 
@@ -249,7 +249,7 @@ public final class BatchedCollisions {
         } else {
             for (int index = 0; index < count; index++) {
                 Entity other = collisionTarget(frame, offset, index);
-                ((LivingEntityDoPushInvoker) source).ar$doPush(other);
+                source.doPush(other);
             }
         }
     }

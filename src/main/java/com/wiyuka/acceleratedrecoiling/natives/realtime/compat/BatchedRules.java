@@ -40,6 +40,13 @@ public final class BatchedRules {
         }
     };
 
+    private static final ClassValue<Boolean> PLAIN_BLOCK = new ClassValue<>() {
+        @Override
+        protected Boolean computeValue(Class<?> type) {
+            return CollisionMethods.inherited(type, "ladder");
+        }
+    };
+
     public static boolean plain(Class<?> type) {
         return PLAIN.get(type);
     }
@@ -78,7 +85,7 @@ public final class BatchedRules {
             }
             state = entity.level().getBlockState(entity.blockPosition());
         }
-        if (state.getClass() != BlockState.class) {
+        if (state.getClass() != BlockState.class || !PLAIN_BLOCK.get(state.getBlock().getClass())) {
             return VANILLA_CALLBACKS;
         }
 

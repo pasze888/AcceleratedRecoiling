@@ -3,11 +3,10 @@ package com.wiyuka.acceleratedrecoiling.mixin;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.wiyuka.acceleratedrecoiling.natives.realtime.compat.BatchedRules;
-import com.wiyuka.acceleratedrecoiling.natives.realtime.index.IndexedEntity;
 import com.wiyuka.acceleratedrecoiling.natives.realtime.PushableMemoryEntity;
 import com.wiyuka.acceleratedrecoiling.natives.realtime.RealtimeNative;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.level.block.TrapDoorBlock;
+import net.neoforged.neoforge.common.NeoForgeConfig;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -46,7 +45,8 @@ public abstract class PushableMemoryMixin implements PushableMemoryEntity {
     @WrapOperation(method = "isPushable", at = @At(value = "INVOKE",
             target = "Lnet/minecraft/world/entity/LivingEntity;onClimbable()Z"))
     private boolean ar$memoizedClimbable(LivingEntity entity, Operation<Boolean> original) {
-        if (!RealtimeNative.isEnabled() || !BatchedRules.plain(entity.getClass())) {
+        if (!RealtimeNative.isEnabled() || NeoForgeConfig.SERVER.fullBoundingBoxLadders.get()
+                || !BatchedRules.plain(entity.getClass())) {
             return original.call(entity);
         }
 
@@ -66,8 +66,7 @@ public abstract class PushableMemoryMixin implements PushableMemoryEntity {
     @Unique
     private boolean ar$rememberClimbable(LivingEntity entity, boolean climbable, long epoch) {
         ar$climbableValue = climbable;
-        var state = ((IndexedEntity) entity).ar$cachedBlockState();
-        ar$pushableValid = state != null && !(state.getBlock() instanceof TrapDoorBlock);
+        ar$pushableValid = !climbable && BatchedRules.classify(entity) == BatchedRules.PUSHABLE;
         ar$pushableEpoch = epoch;
         return ar$climbableValue;
     }
