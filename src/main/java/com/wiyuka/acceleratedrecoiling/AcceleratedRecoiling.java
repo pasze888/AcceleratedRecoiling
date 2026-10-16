@@ -1,7 +1,6 @@
 package com.wiyuka.acceleratedrecoiling;
 
 import com.mojang.logging.LogUtils;
-import com.wiyuka.acceleratedrecoiling.config.FoldConfig;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
@@ -13,6 +12,5 @@ public class AcceleratedRecoiling {
     public static final Logger LOGGER = LogUtils.getLogger();
 
     public AcceleratedRecoiling(IEventBus modEventBus, ModContainer modContainer) {
-        FoldConfig.loadConfig();
     }
 }
