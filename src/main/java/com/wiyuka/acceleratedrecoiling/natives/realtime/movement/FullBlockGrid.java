@@ -23,15 +23,6 @@ final class FullBlockGrid {
         this.minZ = minZ;
     }
 
-    void add(int x, int y, int z) {
-        int localX = x - minX;
-        int localY = y - minY;
-        int localZ = z - minZ;
-
-        int bitIndex = localY * EDGE + localX;
-        occupiedLayers[localZ] |= 1L << bitIndex;
-    }
-
     void addRow(int y, int z, int rowBits) {
         int localY = y - minY;
         int localZ = z - minZ;

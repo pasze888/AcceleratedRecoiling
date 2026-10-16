@@ -1,20 +1,30 @@
 package com.wiyuka.acceleratedrecoiling.natives.realtime;
 
 import com.wiyuka.acceleratedrecoiling.AcceleratedRecoiling;
-import com.wiyuka.acceleratedrecoiling.config.FoldConfig;
 import java.io.IOException;
+import java.lang.foreign.Arena;
+import java.lang.foreign.FunctionDescriptor;
+import java.lang.foreign.Linker;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.SymbolLookup;
+import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandle;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.Locale;
 
 public final class RealtimeNative {
-    private static final int NATIVE_ABI_VERSION = 10;
+    private static final int NATIVE_ABI_VERSION = 11;
+    private static final Linker LINKER = Linker.nativeLinker();
 
     private static boolean attempted;
     private static volatile boolean loaded;
     private static Kernel kernel = Kernel.SCALAR;
     private static int quantizationThreshold;
+    private static SymbolLookup library;
+    private static MethodHandle queryBatchHandle;
 
     private RealtimeNative() {
     }
@@ -27,7 +37,7 @@ public final class RealtimeNative {
         try {
             String name = System.mapLibraryName("AcceleratedRecoilingRealtime");
             String resource = platformPath() + name;
-            var file = Files.createTempFile("ar-realtime-", "-" + name);
+            Path file = Files.createTempFile("ar-realtime-", "-" + name);
             file.toFile().deleteOnExit();
             try (var in = RealtimeNative.class.getResourceAsStream(resource)) {
                 if (in == null) {
@@ -35,7 +45,21 @@ public final class RealtimeNative {
                 }
                 Files.copy(in, file, StandardCopyOption.REPLACE_EXISTING);
             }
-            System.load(file.toAbsolutePath().toString());
+
+            // Arena.global() keeps the library mapped for the process
+            // lifetime; a collected lookup would unload the code the cached
+            // downcall handle points at.
+            library = SymbolLookup.libraryLookup(file, Arena.global());
+            queryBatchHandle = LINKER.downcallHandle(
+                    symbol("ar_queryBatch"),
+                    FunctionDescriptor.of(ValueLayout.JAVA_LONG,
+                            ValueLayout.ADDRESS, ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                            ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG,
+                            ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
+                            ValueLayout.JAVA_DOUBLE, ValueLayout.JAVA_DOUBLE, ValueLayout.JAVA_DOUBLE,
+                            ValueLayout.JAVA_DOUBLE, ValueLayout.JAVA_DOUBLE, ValueLayout.JAVA_DOUBLE,
+                            ValueLayout.JAVA_BOOLEAN));
+
             if (version() != NATIVE_ABI_VERSION) {
                 throw new IllegalStateException("Unsupported native collision ABI");
             }
@@ -54,12 +78,8 @@ public final class RealtimeNative {
         }
     }
 
-    public static boolean isAvailable() {
-        return loaded;
-    }
-
     public static boolean isEnabled() {
-        return loaded && FoldConfig.enableEntityCollision;
+        return loaded;
     }
 
     private static String platformPath() {
@@ -82,12 +102,48 @@ public final class RealtimeNative {
         return "/natives/" + os + "-" + arch + "/";
     }
 
-    private static native int version();
-    private static native int selectKernel(int requested);
-    private static native int quantizationMinEntities();
+    private static MemorySegment symbol(String name) {
+        return library.find(name).orElseThrow(
+                () -> new IllegalStateException("Missing native symbol: " + name));
+    }
 
+    private static int version() {
+        MethodHandle handle = LINKER.downcallHandle(symbol("ar_version"), FunctionDescriptor.of(ValueLayout.JAVA_INT));
+        return invokeInt(handle);
+    }
+
+    private static int selectKernel(int requested) {
+        MethodHandle handle = LINKER.downcallHandle(symbol("ar_selectKernel"),
+                FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
+        try {
+            return (int) handle.invokeExact(requested);
+        } catch (Throwable error) {
+            throw new IllegalStateException("Native selectKernel failed", error);
+        }
+    }
+
+    private static int quantizationMinEntities() {
+        MethodHandle handle = LINKER.downcallHandle(symbol("ar_quantizationMinEntities"),
+                FunctionDescriptor.of(ValueLayout.JAVA_INT));
+        return invokeInt(handle);
+    }
+
+    private static int invokeInt(MethodHandle handle) {
+        try {
+            return (int) handle.invokeExact();
+        } catch (Throwable error) {
+            throw new IllegalStateException("Native call failed", error);
+        }
+    }
+
+    /**
+     * The quantized pre-filter is chosen per section inside the native kernel,
+     * so every SIMD kernel needs the int32 planes reserved. The section view
+     * calls this to size its buffer, so it must stay in lockstep with the
+     * native threshold.
+     */
     public static boolean quantizeSection(int size) {
-        return kernel.quantized && size >= quantizationThreshold;
+        return kernel != Kernel.SCALAR && size >= quantizationThreshold;
     }
 
     public static boolean usesSimd() {
@@ -98,37 +154,55 @@ public final class RealtimeNative {
         return kernel.configName;
     }
 
-    public static native long address(ByteBuffer buffer);
+    public static long address(ByteBuffer buffer) {
+        return MemorySegment.ofBuffer(buffer).address();
+    }
 
-    static native long queryBatch(ByteBuffer sectionDescriptors, int sectionCount, ByteBuffer output,
+    static long queryBatch(ByteBuffer sectionDescriptors, int sectionCount, ByteBuffer output,
             int sourceSection, int sourceSlot, double sourceX, double sourceZ,
             double minX, double minY, double minZ, double maxX, double maxY, double maxZ,
-            boolean retainCollisions, boolean computeImpulses);
+            boolean retainCollisions) {
+        MemorySegment plan = MemorySegment.ofBuffer(sectionDescriptors);
+        MemorySegment out = MemorySegment.ofBuffer(output);
+        try {
+            return (long) queryBatchHandle.invokeExact(plan, sectionCount, out,
+                    (long) sectionDescriptors.capacity(), (long) output.capacity(),
+                    sourceSection, sourceSlot, sourceX, sourceZ,
+                    minX, minY, minZ, maxX, maxY, maxZ, retainCollisions);
+        } catch (Throwable error) {
+            throw new IllegalStateException("Native batch call failed", error);
+        }
+    }
 
     private enum Kernel {
-        AUTO(-1, "auto", false),
-        SIMD(-2, "simd", false),
-        SCALAR(0, "scalar", false),
-        SSE2(1, "sse2", false),
-        AVX2(2, "avx2", false),
-        AVX512(3, "avx512", false),
-        QUANTIZED_SSE2(4, "quantized-sse2", true),
-        QUANTIZED_AVX2(5, "quantized-avx2", true),
-        QUANTIZED_AVX512(6, "quantized-avx512", true);
+        SIMD(-2, "simd"),
+        AUTO(-1, "auto"),
+        SCALAR(0, "scalar"),
+        V1(1, "v1"),
+        V2(2, "v2"),
+        V3(3, "v3"),
+        V4(4, "v4");
 
         private final int nativeId;
         private final String configName;
-        private final boolean quantized;
 
-        Kernel(int nativeId, String configName, boolean quantized) {
+        Kernel(int nativeId, String configName) {
             this.nativeId = nativeId;
             this.configName = configName;
-            this.quantized = quantized;
         }
 
         static Kernel fromName(String name) {
+            // Old configurations named one kernel per ISA *and* per quantized
+            // variant. The quantized pre-filter is now automatic inside the
+            // kernel, so both spellings resolve to the matching ISA level.
+            String normalized = switch (name.toLowerCase(Locale.ROOT)) {
+                case "sse2", "quantized-sse2" -> "v1";
+                case "avx2", "quantized-avx2" -> "v3";
+                case "avx512", "quantized-avx512" -> "v4";
+                default -> name.toLowerCase(Locale.ROOT);
+            };
             for (Kernel kernel : values()) {
-                if (kernel.configName.equals(name)) {
+                if (kernel.configName.equals(normalized)) {
                     return kernel;
                 }
             }

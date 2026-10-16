@@ -21,7 +21,6 @@ import net.minecraft.world.level.gamerules.GameRules;
 import net.minecraft.world.level.entity.EntitySectionStorage;
 import net.minecraft.world.level.entity.LevelEntityGetterAdapter;
 import net.minecraft.world.phys.AABB;
-import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.common.config.NeoForgeServerConfig;
 
 public final class BatchedCollisions {
@@ -32,16 +31,11 @@ public final class BatchedCollisions {
     private static final int SECTION_COINCIDENT_OFFSET = SECTION_SPATIAL_OFFSET + Long.BYTES;
     private static final int SECTION_DESCRIPTOR_BYTES = SECTION_COINCIDENT_OFFSET + Long.BYTES;
 
-    private static final boolean NATIVE_PUSH = Boolean.parseBoolean(System.getProperty("ar.nativePush", "true"));
-    private static final int OUTPUT_FIELD_COUNT = NATIVE_PUSH
-            ? OutputField.values().length : OutputField.PUSH_TARGETS.ordinal() + 1;
-    private static final int OUTPUT_BYTES_PER_ENTRY = OUTPUT_FIELD_COUNT * Long.BYTES;
+    private static final int OUTPUT_BYTES_PER_ENTRY = OutputField.values().length * Long.BYTES;
 
     private enum OutputField {
         COLLISIONS,
-        PUSH_TARGETS,
-        IMPULSE_X,
-        IMPULSE_Z;
+        PUSH_TARGETS;
 
         int byteOffset(int entries) {
             return ordinal() * entries * Long.BYTES;
@@ -211,7 +205,7 @@ public final class BatchedCollisions {
         long counts = RealtimeNative.queryBatch(frame.sectionDescriptors, frame.sections.size(), frame.output, frame.sourceSection,
                 indexedSource.ar$sectionSlot(), source.getX(), source.getZ(),
                 bounds.minX, bounds.minY, bounds.minZ, bounds.maxX, bounds.maxY, bounds.maxZ,
-                crammingLimit > 0, NATIVE_PUSH);
+                crammingLimit > 0);
         if (counts == -1) {
             return false;
         }
@@ -248,13 +242,9 @@ public final class BatchedCollisions {
         int count = crammingAttempted ? collisionCount : pushCount;
         OutputField hits = crammingAttempted ? OutputField.COLLISIONS : OutputField.PUSH_TARGETS;
         int offset = hits.byteOffset(frame.entryCount);
-        if (NATIVE_PUSH && !crammingAttempted) {
-            dispatchImpulses(source, frame, count, offset);
-        } else {
-            for (int index = 0; index < count; index++) {
-                Entity other = collisionTarget(frame, offset, index);
-                source.doPush(other);
-            }
+        for (int index = 0; index < count; index++) {
+            Entity other = collisionTarget(frame, offset, index);
+            source.doPush(other);
         }
     }
 
@@ -263,85 +253,5 @@ public final class BatchedCollisions {
         int sectionIndex = (int) (hit >>> Integer.SIZE);
         int entitySlot = (int) hit;
         return frame.sections.get(sectionIndex).entities[entitySlot];
-    }
-
-    private static void dispatchImpulses(LivingEntity source, Frame frame, int count, int offset) {
-        if (count == 0) {
-            return;
-        }
-
-        Vec3 velocity = source.getDeltaMovement();
-        double velocityX = velocity.x;
-        double velocityY = velocity.y;
-        double velocityZ = velocity.z;
-        boolean sourcePushabilityChecked = false;
-        boolean sourcePushable = false;
-        boolean sourceNeedsSync = false;
-
-        int impulseXOffset = OutputField.IMPULSE_X.byteOffset(frame.entryCount);
-        int impulseZOffset = OutputField.IMPULSE_Z.byteOffset(frame.entryCount);
-        ByteBuffer output = frame.output;
-        int targetSectionIndex = -1;
-        Entity[] targets = null;
-
-        for (int index = 0; index < count; index++) {
-            long hit = output.getLong(offset + index * Long.BYTES);
-            int sectionIndex = (int) (hit >>> Integer.SIZE);
-            if (sectionIndex != targetSectionIndex) {
-                targetSectionIndex = sectionIndex;
-                targets = frame.sections.get(sectionIndex).entities;
-            }
-
-            int entitySlot = (int) hit;
-            var other = (LivingEntity) targets[entitySlot];
-            int impulseOffset = index * Double.BYTES;
-            double impulseX = output.getDouble(impulseXOffset + impulseOffset);
-            double impulseZ = output.getDouble(impulseZOffset + impulseOffset);
-            if (!canPushPair(source, other)) {
-                continue;
-            }
-
-            if (!other.isVehicle() && isPushableInBatch(other, true)) {
-                other.push(-impulseX, 0.0, -impulseZ);
-            }
-
-            if (!sourcePushabilityChecked) {
-                sourcePushable = !source.isVehicle() && isPushableInBatch(source, frame.sourceSection >= 0);
-                sourcePushabilityChecked = true;
-            }
-            if (!sourcePushable || !Double.isFinite(impulseX) || !Double.isFinite(impulseZ)) {
-                continue;
-            }
-
-            double nextX = velocityX + impulseX;
-            double nextY = velocityY + 0.0;
-            double nextZ = velocityZ + impulseZ;
-            if (Double.isFinite(nextX) && Double.isFinite(nextY) && Double.isFinite(nextZ)) {
-                velocityX = nextX;
-                velocityY = nextY;
-                velocityZ = nextZ;
-            }
-            sourceNeedsSync = true;
-        }
-
-        if (sourceNeedsSync) {
-            source.setDeltaMovement(new Vec3(velocityX, velocityY, velocityZ));
-            source.needsSync = true;
-        }
-    }
-
-    private static boolean canPushPair(LivingEntity source, LivingEntity other) {
-        return !other.isSleeping()
-                && !other.isPassengerOfSameVehicle(source)
-                && !source.noPhysics
-                && !other.noPhysics;
-    }
-
-    private static boolean isPushableInBatch(LivingEntity entity, boolean sectionTicking) {
-        if (sectionTicking) {
-            return ((PushableMemoryEntity) entity).ar$isPushableInTickingSection();
-        }
-
-        return entity.isPushable();
     }
 }

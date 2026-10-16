@@ -5,6 +5,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.TrapDoorBlock;
 import net.minecraft.world.level.block.state.BlockState;
 
@@ -26,40 +27,18 @@ public final class BatchedRules {
         POLICY.incrementAndGet();
     }
 
-    private static boolean vanillaEntity(Class<?> type) {
-        String vanillaPackage = Entity.class.getPackageName();
-        String entityPackage = type.getPackageName();
-        return entityPackage.equals(vanillaPackage) || entityPackage.startsWith(vanillaPackage + ".");
+    private static boolean vanillaPackage(Class<?> anchor, Class<?> type) {
+        String vanilla = anchor.getPackageName();
+        String name = type.getPackageName();
+        return name.equals(vanilla) || name.startsWith(vanilla + ".");
     }
-
-    private static final ClassValue<Boolean> PLAIN = new ClassValue<>() {
-        @Override
-        protected Boolean computeValue(Class<?> type) {
-            return vanillaEntity(type) && LivingEntity.class.isAssignableFrom(type)
-                    && CollisionMethods.inherited(type, "pushable");
-        }
-    };
-
-    private static final ClassValue<Boolean> PLAIN_BLOCK = new ClassValue<>() {
-        @Override
-        protected Boolean computeValue(Class<?> type) {
-            return CollisionMethods.inherited(type, "ladder");
-        }
-    };
 
     public static boolean plain(Class<?> type) {
-        return PLAIN.get(type);
+        return vanillaPackage(Entity.class, type) && LivingEntity.class.isAssignableFrom(type);
     }
 
-    private static final ClassValue<Boolean> SOFT = new ClassValue<>() {
-        @Override
-        protected Boolean computeValue(Class<?> type) {
-            return vanillaEntity(type) && CollisionMethods.inherited(type, "soft");
-        }
-    };
-
     public static boolean soft(Class<?> type) {
-        return SOFT.get(type);
+        return vanillaPackage(Entity.class, type);
     }
 
     public static int classify(Entity entity) {
@@ -85,7 +64,8 @@ public final class BatchedRules {
             }
             state = entity.level().getBlockState(entity.blockPosition());
         }
-        if (state.getClass() != BlockState.class || !PLAIN_BLOCK.get(state.getBlock().getClass())) {
+        if (state.getClass() != BlockState.class
+                || !vanillaPackage(Block.class, state.getBlock().getClass())) {
             return VANILLA_CALLBACKS;
         }
 
