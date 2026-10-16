@@ -1,133 +1,73 @@
-def toolchainVersion = providers.gradleProperty('cpp_toolchain_version').get()
-def toolchainDirectory = layout.buildDirectory.dir("cpptoolchain/${toolchainVersion}")
-def localArchive = providers.gradleProperty('cppToolchainArchive')
-def nativeSource = providers.provider { layout.projectDirectory.dir('native/realtime') }
-def nativeHeaders = toolchainDirectory.map { it.dir('third_party/jni') }
-def nativeBuildRoot = layout.buildDirectory.dir("native-local/${toolchainVersion}")
+// Native collision library build.
+//
+// A single host zig cross-compiles all four shipped platforms from one ISA
+// agnostic source; there is no CMake, no JNI headers and no C++ toolchain
+// download. Zig must be on PATH (0.16.x).
+
+def zig = providers.gradleProperty('zig_executable').getOrElse('zig')
+def nativeSource = layout.projectDirectory.dir('native')
+def nativeBuildRoot = layout.buildDirectory.dir('native-zig')
 def nativeResources = layout.buildDirectory.dir('generated/realtime-natives')
 
-def osName = System.getProperty('os.name').toLowerCase(Locale.ROOT)
-def windows = osName.startsWith('windows')
-def hostOs = windows ? 'windows' : osName.contains('mac') ? 'macos' : 'linux'
-def hostArch = System.getProperty('os.arch').toLowerCase(Locale.ROOT) in ['aarch64', 'arm64'] ? 'arm64' : 'x64'
-def hostPlatform = hostOs + '-' + hostArch
-
+// Zig target triples and the library name each platform packages under.
+// Zig installs DLLs under bin/ and everything else under lib/.
 def targets = [
-        'windows-x64': ['x86_64-windows-msvc-cmake.bat', 'AcceleratedRecoilingRealtime.dll'],
-        'linux-x64': ['x86_64-linux-gnu-cmake.bat', 'libAcceleratedRecoilingRealtime.so'],
-        'macos-x64': ['x86_64-apple-macos-cmake.bat', 'libAcceleratedRecoilingRealtime.dylib'],
-        'macos-arm64': ['arm64-apple-macos-cmake.bat', 'libAcceleratedRecoilingRealtime.dylib']
+        'windows-x64': ['x86_64-windows-gnu', 'bin/AcceleratedRecoilingRealtime.dll'],
+        'linux-x64': ['x86_64-linux-gnu', 'lib/libAcceleratedRecoilingRealtime.so'],
+        'macos-x64': ['x86_64-macos-none', 'lib/libAcceleratedRecoilingRealtime.dylib'],
+        'macos-arm64': ['aarch64-macos-none', 'lib/libAcceleratedRecoilingRealtime.dylib']
 ]
-if (!windows) {
-    targets = [(hostPlatform): [null, System.mapLibraryName('AcceleratedRecoilingRealtime')]]
-}
 
-repositories {
-    ivy {
-        name = 'GitHub C++ Toolchain'
-        url = 'https://github.com/wiyuka-owo/AcceleratedRecoiling/releases/download'
-        patternLayout { artifact '[revision]/[artifact].[ext]' }
-        metadataSources { artifact() }
-        content { includeGroup 'com.wiyuka.env' }
-    }
-}
-configurations { cppToolchain }
-dependencies { cppToolchain "com.wiyuka.env:cpptoolchain:${toolchainVersion}@zip" }
-
-def extractToolchain = tasks.register('extractToolchain', Sync) {
-    group = 'build native'
-    from { zipTree(localArchive.isPresent() ? file(localArchive.get()) : configurations.cppToolchain.singleFile) }
-    into toolchainDirectory
-}
-
-def compileTasks = [:]
 def libraries = [:]
+def zigTasks = [:]
 targets.each { platform, target ->
     def taskSuffix = platform.tokenize('-').collect { it.capitalize() }.join('')
-    def buildDirectory = nativeBuildRoot.map { it.dir(platform) }
-    def library = buildDirectory.map { it.file(target[1]) }
-    def toolsDirectory = toolchainDirectory.get().dir('env/bin').asFile
-    def testEnabled = platform == hostPlatform
+    def prefix = nativeBuildRoot.map { it.dir(platform) }
+    def library = prefix.map { it.file(target[1]) }
 
-    def configure = tasks.register("configureNative${taskSuffix}", Exec) {
-        dependsOn extractToolchain
-        inputs.file(nativeSource.map { it.file('CMakeLists.txt') })
-        inputs.property('toolchainVersion', toolchainVersion)
-        outputs.file(buildDirectory.map { it.file('CMakeCache.txt') })
-
-        def arguments = ['-DCMAKE_BUILD_TYPE=Release', "-DAR_KERNEL_TESTS=${testEnabled ? 'ON' : 'OFF'}",
-                         "-DAR_JNI_HEADERS=${nativeHeaders.get().asFile}",
-                         '-S', nativeSource.get().asFile.absolutePath, '-B', buildDirectory.get().asFile.absolutePath]
-        if (windows) {
-            commandLine(['cmd', '/c', new File(toolsDirectory, target[0]).absolutePath] + arguments)
-        } else {
-            commandLine(['cmake'] + arguments)
-        }
-    }
-
-    compileTasks[platform] = tasks.register("compileNative${taskSuffix}", Exec) {
+    zigTasks[platform] = tasks.register("zigBuild" + taskSuffix, Exec) {
         group = 'build native'
-        dependsOn configure
+        description = "Compile the realtime collision library for " + platform + "."
         inputs.dir(nativeSource)
-        inputs.dir(nativeHeaders)
+        inputs.property('zigExecutable', zig)
+        inputs.property('target', target[0])
         outputs.file(library)
-        if (testEnabled) {
-            outputs.file(buildDirectory.map { it.file(windows ? 'RealtimeKernelTest.exe' : 'RealtimeKernelTest') })
-        }
 
-        def arguments = [buildDirectory.get().asFile.absolutePath, '--parallel', '2']
-        if (windows) {
-            commandLine(['cmd', '/c', new File(toolsDirectory, 'cmake-build.bat').absolutePath] + arguments)
-        } else {
-            commandLine(['cmake', '--build'] + arguments)
-        }
+        commandLine zig, 'build', '-Doptimize=ReleaseFast', "-Dtarget=" + target[0],
+                '--prefix', prefix.get().asFile.absolutePath
+        workingDir nativeSource
+        // A read-only global cache is common on CI images; keep both caches
+        // inside the build directory so the task is hermetic.
+        environment 'ZIG_GLOBAL_CACHE_DIR', prefix.get().dir('.zig-global').asFile.absolutePath
+        environment 'ZIG_LOCAL_CACHE_DIR', prefix.get().dir('.zig-cache').asFile.absolutePath
     }
     libraries[platform] = library
 }
 
 tasks.register('compileRealtimeNative') {
     group = 'build native'
-    dependsOn compileTasks.values()
+    dependsOn zigTasks.values()
 }
 
+// Differential tests (scalar oracle vs vector/spatial paths). The build runs
+// two binaries, one pinned to baseline and one for this machine, so the higher
+// ISA objects are actually executed.
 tasks.register('testRealtimeKernel', Exec) {
     group = 'verification'
-    dependsOn compileTasks[hostPlatform]
-    commandLine nativeBuildRoot.get().file("${hostPlatform}/${windows ? 'RealtimeKernelTest.exe' : 'RealtimeKernelTest'}").asFile
+    description = 'Run the Zig collision kernel differential tests.'
+    inputs.dir(nativeSource)
+    commandLine zig, 'build', 'test'
+    workingDir nativeSource
+    environment 'ZIG_GLOBAL_CACHE_DIR', layout.buildDirectory.dir('zig-test-global').get().asFile.absolutePath
+    environment 'ZIG_LOCAL_CACHE_DIR', layout.buildDirectory.dir('zig-test-cache').get().asFile.absolutePath
 }
 
 def copyNativeLibraries = tasks.register('copyRealtimeNative', Sync) {
-    dependsOn compileTasks.values()
+    dependsOn zigTasks.values()
     libraries.each { platform, library ->
-        from(library) { into "natives/${platform}" }
+        from(library) { into "natives/" + platform }
     }
     into nativeResources
 }
 sourceSets.main.resources.srcDir nativeResources
 tasks.named('processResources') { dependsOn copyNativeLibraries }
-tasks.named('jar', Jar) {
-    manifest.attributes('AR-Native-Toolchain': toolchainVersion)
-}
-
-def toolchainMetadata = tasks.register('generateCppToolchainMetadata', WriteProperties) {
-    destinationFile = layout.buildDirectory.file('generated/toolchain/toolchain.properties')
-    property 'version', toolchainVersion
-}
-
-tasks.register('packageCppToolchain', Zip) {
-    group = 'build native'
-    description = 'Package the compiler environment and current C++ source for a GitHub Release.'
-    archiveFileName = 'cpptoolchain.zip'
-    destinationDirectory = layout.buildDirectory.dir("distributions/${toolchainVersion}")
-    preserveFileTimestamps = false
-    reproducibleFileOrder = true
-
-    def environmentDirectory = file(providers.gradleProperty('cppToolchainEnvironment')
-            .getOrElse('AcceleratedRecoiling-third-party'))
-    inputs.file(new File(environmentDirectory, 'env/tools/clang/bin/clang-cl.exe'))
-    from(environmentDirectory) { include 'env/**', 'third_party/jni/**' }
-    from('native/realtime') { into 'native/realtime' }
-    from('native/toolchain-README.md') { rename { 'README.md' } }
-    from(toolchainMetadata.flatMap { it.destinationFile })
-    from('LICENSE')
-}
