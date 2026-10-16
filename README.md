@@ -7,7 +7,7 @@
 ## 特性
 
 - 保留原版实体查询顺序、推挤调用时机与挤压伤害规则的同时大幅度提升了碰撞筛选的性能。
-- 根据 CPU 能力自动选择计算SIMD指令集
+- 根据 CPU 能力自动选择计算SIMD指令集（x86-64 基线 / v2 / v3 / v4 四档，单份源码按档编译，运行时 cpuid 选择）
 
 ## 性能
 
@@ -51,13 +51,21 @@
 
 ## 构建
 
-使用 JDK 21
+需要 JDK 21 用于运行 Gradle（Java 25 由 toolchain 自动提供），以及 `zig` 0.16.x。
 
 ```
 ./gradlew jar
 ```
 
-Gradle 将下载位于 GitHub Release 中的由 `cpp_toolchain_version` 指定的 `cpptoolchain.zip`，并构建为二进制动态库。产物位于 `build/libs/`。
+Gradle 会用本机 zig 交叉编译 Windows x64、Linux x64、macOS x64 与 macOS ARM64 四个平台的动态库，无需 CMake、JNI 头文件或额外工具链下载。产物位于 `build/libs/`。
+
+原生内核的差分测试（scalar 参考实现 vs SIMD/空间索引路径）：
+
+```
+./gradlew testRealtimeKernel
+```
+
+可用 `-Dar.realtime.kernel=<档位>` 覆盖自动选择，取值 `auto`（默认）、`simd`、`scalar`、`v1`~`v4`。
 
 ## 支持与赞助
 
