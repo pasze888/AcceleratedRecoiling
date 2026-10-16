@@ -92,21 +92,20 @@ jobs:
           echo "mc      = $mc_version"
           echo "type    = $release_type"
 
-      - name: Check native toolchain release
+      # The native collision library is cross-compiled by zig from one host,
+      # so every runner needs zig on PATH. Pinned to the 0.16.x line the
+      # build API surface was written against.
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Native kernel tests
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-
-          toolchain=$(grep -E '^cpp_toolchain_version=' gradle.properties | head -n1 | cut -d= -f2- | tr -d '[:space:]')
-          echo "cpp_toolchain_version = $toolchain"
-
-          if ! gh release view "$toolchain" --repo wiyuka-owo/AcceleratedRecoiling > /dev/null; then
-            echo "Native toolchain release '$toolchain' not found in wiyuka-owo/AcceleratedRecoiling." >&2
-            echo "Publish it before releasing." >&2
-            exit 1
-          fi
+          cd native
+          zig build test
 
       - name: Build
         shell: bash
@@ -146,6 +145,15 @@ jobs:
             exit 1
           fi
           echo "$natives"
+
+          # One library per supported platform, or players silently fall
+          # back to vanilla collisions on the missing ones.
+          for platform in windows-x64 linux-x64 macos-x64 macos-arm64; do
+            if ! echo "$natives" | grep -q "natives/$platform/"; then
+              echo "Jar is missing natives/$platform/" >&2
+              exit 1
+            fi
+          done
 
       - name: Upload build output
         uses: actions/upload-artifact@v4

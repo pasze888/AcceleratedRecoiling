@@ -6,3 +6,12 @@
 /scripts/
 /AcceleratedRecoiling-third-party/
 /docs/
+/.zig-cache/
+/.zig-global/
+/zig-out/
+/zig-pkg/
+/native/.zig-cache/
+/native/.zig-global/
+/native/zig-out/
+/native/zig-pkg/
+*.core
