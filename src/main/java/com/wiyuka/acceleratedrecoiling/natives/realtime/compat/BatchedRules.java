@@ -33,8 +33,15 @@ public final class BatchedRules {
         return name.equals(vanilla) || name.startsWith(vanilla + ".");
     }
 
+    /**
+     * A class may sit under {@code net.minecraft.*} and still override the collision
+     * methods the batch path replaces, so the package check is only the cheap first
+     * gate; {@link VanillaMethods} settles what the class actually runs.
+     */
     public static boolean plain(Class<?> type) {
-        return vanillaPackage(Entity.class, type) && LivingEntity.class.isAssignableFrom(type);
+        return vanillaPackage(Entity.class, type)
+                && LivingEntity.class.isAssignableFrom(type)
+                && VanillaMethods.plainCollisionBehaviour(type);
     }
 
     public static boolean soft(Class<?> type) {
@@ -54,6 +61,10 @@ public final class BatchedRules {
             return REJECTED;
         }
         if (entity.getTeam() != null || entity.isPassenger() || entity.isVehicle()) {
+            return VANILLA_CALLBACKS;
+        }
+        // TamableAnimal derives a team from its owner; the scoreboard lookup above misses it.
+        if (!VanillaMethods.usesVanillaGetTeam(entity)) {
             return VANILLA_CALLBACKS;
         }
 
