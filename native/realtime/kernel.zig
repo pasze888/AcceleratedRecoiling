@@ -186,9 +186,7 @@ fn indexedSection(
 
     var word_index: usize = 0;
     while (word_index < (count + 63) / 64) : (word_index += 1) {
-        var candidate_mask: u64 = undefined;
-        var confirmed_mask: u64 = undefined;
-        sq.masks(word_index, &candidate_mask, &confirmed_mask);
+        var candidate_mask = sq.candidates(word_index);
 
         if (section_index == q.source_section and q.source_slot >= 0) {
             const source_word: usize = @intCast(@divTrunc(q.source_slot, 64));
@@ -198,8 +196,8 @@ fn indexedSection(
         }
 
         candidate_mask &= eligible[word_index] | fallback[word_index];
-        var pending = candidate_mask & ~confirmed_mask;
-        var collision_mask = candidate_mask & confirmed_mask;
+        var pending = candidate_mask;
+        var collision_mask: u64 = 0;
 
         while (pending != 0) {
             const bit: u6 = @intCast(@ctz(pending));
@@ -294,22 +292,22 @@ fn vectorBatch(
         const eligible = if (current.spatial) |index| index.entityBitmap(.eligible) else null;
         const fallback = if (current.spatial) |index| index.entityBitmap(.fallback) else null;
         var candidate_word: u64 = 0;
-        var confirmed_word: u64 = 0;
 
         var block_start: usize = 0;
         while (block_start + ILANES <= count) : (block_start += ILANES) {
             var candidate_mask: u32 = 0xffff;
+            // Only the quantized pre-filter can confirm an overlap without the
+            // f64 test; the spatial path now exact-tests every candidate.
             var confirmed_mask: u32 = 0;
 
             if (spatial_query) |*sq| {
                 const bit_offset: u5 = @intCast(block_start % 64);
                 if (bit_offset == 0) {
                     const word = block_start / 64;
-                    sq.masks(word, &candidate_word, &confirmed_word);
+                    candidate_word = sq.candidates(word);
                     candidate_word &= eligible.?[word] | fallback.?[word];
                 }
                 candidate_mask = @as(u32, @truncate(candidate_word >> bit_offset)) & 0xffff;
-                confirmed_mask = @as(u32, @truncate(confirmed_word >> bit_offset)) & candidate_mask;
                 if (candidate_mask == 0) continue;
             } else if (use_quantization) {
                 const c_min_x = loadI(quantized_boxes, BOUNDS_MIN_X * stride + block_start);

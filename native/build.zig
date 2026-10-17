@@ -35,6 +35,9 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run the kernel differential tests");
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = testModule(b, base, optimize) })).step);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = testModule(b, b.graph.host, optimize) })).step);
+    // The dispatcher probes the CPU once per process; caching the wrong level
+    // would execute instructions this CPU cannot run.
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = module(b, "cpuid.zig", base, optimize) })).step);
 }
 
 fn addKernels(b: *std.Build, compile: *std.Build.Step.Compile, arch: std.Target.Cpu.Arch) void {

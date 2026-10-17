@@ -129,7 +129,8 @@ pub export fn ar_queryBatch(
 }
 
 fn dispatch(k: Kernel, sections: [*]const Section, section_count: i32, entries: i32, output: [*]i64, q: *const Query) i64 {
-    if (k == .scalar or useLevel(k) == 0) {
+    const level = useLevel(k);
+    if (level == 0) {
         return switch (cpuLevel()) {
             4 => scalarVariant(.x86_64_v4, sections, section_count, entries, output, q),
             3 => scalarVariant(.x86_64_v3, sections, section_count, entries, output, q),
@@ -138,7 +139,7 @@ fn dispatch(k: Kernel, sections: [*]const Section, section_count: i32, entries: 
         };
     }
 
-    return switch (useLevel(k)) {
+    return switch (level) {
         4 => mv.externForLevel(BatchFn, .x86_64_v4, "batch")(sections, section_count, entries, output, q),
         3 => mv.externForLevel(BatchFn, .x86_64_v3, "batch")(sections, section_count, entries, output, q),
         2 => mv.externForLevel(BatchFn, .x86_64_v2, "batch")(sections, section_count, entries, output, q),

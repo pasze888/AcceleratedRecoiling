@@ -6,6 +6,9 @@ pub const AXIS_COUNT = 3;
 pub const BOUNDS_FIELD_COUNT = AXIS_COUNT * 2;
 pub const CELL_COUNT = 32;
 
+/// Row indices, shared with SpatialIndex.java. `needs_exact_bounds` and
+/// `empty` keep their slot (Java still writes them) but no longer have a
+/// reader in the kernel.
 pub const Kind = enum(i32) { empty = 0, needs_exact_bounds = 1, eligible = 2, fallback = 3 };
 
 pub const SpatialIndex = extern struct {
@@ -44,9 +47,6 @@ pub const SpatialIndex = extern struct {
 pub const SpatialQuery = struct {
     candidate_min: [AXIS_COUNT][*]const u64,
     candidate_max: [AXIS_COUNT][*]const u64,
-    confirmed_min: [AXIS_COUNT][*]const u64,
-    confirmed_max: [AXIS_COUNT][*]const u64,
-    needs_exact_bounds: [*]const u64,
 
     pub fn init(index: *const SpatialIndex, bounds: *const [BOUNDS_FIELD_COUNT]i32) SpatialQuery {
         var self: SpatialQuery = undefined;
@@ -58,24 +58,19 @@ pub const SpatialQuery = struct {
 
             self.candidate_min[axis] = index.boundaryPrefix(min_field, max_cell);
             self.candidate_max[axis] = index.boundaryPrefix(max_field, min_cell - 1);
-
-            self.confirmed_min[axis] = index.boundaryPrefix(min_field, max_cell - 1);
-            self.confirmed_max[axis] = index.boundaryPrefix(max_field, min_cell);
         }
 
-        self.needs_exact_bounds = index.entityBitmap(.needs_exact_bounds);
         return self;
     }
 
-    pub inline fn masks(self: *const SpatialQuery, word: usize, candidates: *u64, confirmed: *u64) void {
-        candidates.* = self.candidate_min[0][word] & ~self.candidate_max[0][word]
+    /// Candidates only. The Java side also maintains a "confirmed" row set
+    /// (boxes strictly inside the query), but reading those seven extra
+    /// bitmaps cost more than the f64 overlap test it skipped, so the kernel
+    /// no longer asks for them. The rows still exist in the bitmap layout.
+    pub inline fn candidates(self: *const SpatialQuery, word: usize) u64 {
+        return self.candidate_min[0][word] & ~self.candidate_max[0][word]
             & self.candidate_min[1][word] & ~self.candidate_max[1][word]
             & self.candidate_min[2][word] & ~self.candidate_max[2][word];
-
-        confirmed.* = self.confirmed_min[0][word] & ~self.confirmed_max[0][word]
-            & self.confirmed_min[1][word] & ~self.confirmed_max[1][word]
-            & self.confirmed_min[2][word] & ~self.confirmed_max[2][word]
-            & ~self.needs_exact_bounds[word];
     }
 };
 
