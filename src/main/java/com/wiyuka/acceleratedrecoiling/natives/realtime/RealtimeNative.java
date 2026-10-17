@@ -30,19 +30,6 @@ public final class RealtimeNative {
                 enabled ? kernelName() : "vanilla collisions");
     }
 
-    /**
-     * The int32 pre-filter only pays off for SIMD. A scalar JVM test costs more
-     * than the f64 compare it replaces, so the Java kernel never asks for the
-     * quantized planes.
-     */
-    public static boolean quantizeSection(int size) {
-        return false;
-    }
-
-    public static boolean usesSimd() {
-        return true;
-    }
-
     public static String kernelName() {
         return "java";
     }

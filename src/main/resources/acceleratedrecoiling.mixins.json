@@ -7,7 +7,6 @@
   "mixins": [
     "EntityMixin",
     "PushableMemoryMixin",
-    "ServerLevelMixin",
     "ClimbableTagMixin",
     "BatchedEntityStateMixin",
     "BatchedSyncedStateMixin",

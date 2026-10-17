@@ -2,6 +2,7 @@ package com.wiyuka.acceleratedrecoiling;
 
 import com.mojang.logging.LogUtils;
 import com.wiyuka.acceleratedrecoiling.command.ArCommand;
+import com.wiyuka.acceleratedrecoiling.natives.realtime.RealtimeNative;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
@@ -14,6 +15,7 @@ public class AcceleratedRecoiling {
     public static final Logger LOGGER = LogUtils.getLogger();
 
     public AcceleratedRecoiling(IEventBus modEventBus, ModContainer modContainer) {
+        RealtimeNative.initialize();
         NeoForge.EVENT_BUS.addListener(ArCommand::register);
     }
 }

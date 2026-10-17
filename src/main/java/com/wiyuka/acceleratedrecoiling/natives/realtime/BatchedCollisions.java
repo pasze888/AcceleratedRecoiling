@@ -8,7 +8,6 @@ import com.wiyuka.acceleratedrecoiling.natives.realtime.index.IndexedSection;
 import com.wiyuka.acceleratedrecoiling.natives.realtime.index.JavaQuery;
 import com.wiyuka.acceleratedrecoiling.natives.realtime.index.RealtimeSection;
 import com.wiyuka.acceleratedrecoiling.natives.realtime.movement.BlockCollisionCache;
-import java.lang.ref.Reference;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import net.minecraft.server.level.ServerLevel;
@@ -119,7 +118,6 @@ public final class BatchedCollisions {
             prepareSectionViews(frame, source);
             return queryAndPush(source, level, bounds, frame);
         } finally {
-            Reference.reachabilityFence(frame.sections);
             for (var section : frame.sections) section.release();
             frame.sections.clear();
             frames.addFirst(frame);
