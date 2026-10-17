@@ -47,6 +47,8 @@ abstract class BlockSectionVersionMixin implements VersionedBlockSection {
     @Inject(method = { "read", "recalcBlockCounts" }, at = { @At("HEAD"), @At("RETURN") })
     private void ar$blocksReplaced(CallbackInfo ci) {
         ar$blockVersion++;
-        ar$blockIndex = null;
+        if (ar$blockIndex != null) {
+            ar$blockIndex.invalidateAll();
+        }
     }
 }
