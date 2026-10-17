@@ -91,7 +91,7 @@ public final class BlockCollisionCache {
     }
 
     public static FullBlockCollisions collect(Entity source, Level level, AABB area) {
-        if (!canCache(source, level)) {
+        if (!RealtimeNative.isEnabled() || !canCache(source, level)) {
             return null;
         }
 

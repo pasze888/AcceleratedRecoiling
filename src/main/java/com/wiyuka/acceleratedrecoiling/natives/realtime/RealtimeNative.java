@@ -21,6 +21,7 @@ public final class RealtimeNative {
 
     private static boolean attempted;
     private static volatile boolean loaded;
+    private static volatile boolean disabled;
     private static Kernel kernel = Kernel.SCALAR;
     private static int quantizationThreshold;
     private static SymbolLookup library;
@@ -56,6 +57,7 @@ public final class RealtimeNative {
                             ValueLayout.ADDRESS, ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
                             ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG,
                             ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
+                            ValueLayout.JAVA_DOUBLE, ValueLayout.JAVA_DOUBLE,
                             ValueLayout.JAVA_DOUBLE, ValueLayout.JAVA_DOUBLE, ValueLayout.JAVA_DOUBLE,
                             ValueLayout.JAVA_DOUBLE, ValueLayout.JAVA_DOUBLE, ValueLayout.JAVA_DOUBLE,
                             ValueLayout.JAVA_BOOLEAN));
@@ -63,6 +65,13 @@ public final class RealtimeNative {
             if (version() != NATIVE_ABI_VERSION) {
                 throw new IllegalStateException("Unsupported native collision ABI");
             }
+
+            // Call the batch entry point once, with the same buffer kinds the
+            // real path hands over. This is the only way to compare the
+            // descriptor above against native/realtime/exports.zig at load;
+            // without it a drift only surfaces mid-tick, where it takes the
+            // server down instead of falling back to vanilla collisions.
+            probeQueryBatch();
 
             Kernel requested = Kernel.fromName(System.getProperty("ar.realtime.kernel", Kernel.AUTO.configName));
             int selectedKernel = selectKernel(requested.nativeId);
@@ -79,7 +88,28 @@ public final class RealtimeNative {
     }
 
     public static boolean isEnabled() {
-        return loaded;
+        return loaded && !disabled;
+    }
+
+    /**
+     * Runtime A/B switch: the native library stays loaded and initialized, so
+     * every accelerated path can be flipped back on without a restart.
+     */
+    public static void setEnabled(boolean enabled) {
+        disabled = !enabled;
+        AcceleratedRecoiling.LOGGER.info("AcceleratedRecoiling {}: {}", enabled ? "enabled" : "disabled",
+                enabled ? kernelName() : "vanilla collisions");
+    }
+
+    /**
+     * Zero sections, so the kernel only checks its arguments and returns
+     * without touching entity data. Throws when the descriptor and the export
+     * disagree, which {@link #initialize()} turns into the vanilla fallback.
+     */
+    private static void probeQueryBatch() {
+        ByteBuffer plan = ByteBuffer.allocateDirect(64);
+        ByteBuffer output = ByteBuffer.allocateDirect(64);
+        queryBatch(plan, 0, output, 0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, false);
     }
 
     private static String platformPath() {
