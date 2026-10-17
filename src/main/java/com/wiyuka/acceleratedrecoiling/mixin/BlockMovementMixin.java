@@ -53,14 +53,6 @@ abstract class BlockMovementMixin {
         }
     }
 
-    @Inject(method = "collectCandidateStepUpHeights", at = @At("HEAD"), cancellable = true)
-    private static void ar$fullBlockSteps(AABB box, List<VoxelShape> shapes, float maxHeight, float skippedHeight,
-            CallbackInfoReturnable<float[]> result) {
-        if (shapes instanceof FullBlockCollisions blocks) {
-            result.setReturnValue(blocks.stepHeights(box, maxHeight, skippedHeight));
-        }
-    }
-
     @WrapOperation(method = "checkSupportingBlock",
             at = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/Level;findSupportingBlock(Lnet/minecraft/world/entity/Entity;Lnet/minecraft/world/phys/AABB;)Ljava/util/Optional;"))
     private Optional<BlockPos> ar$supportingBlock(Level level, Entity source, AABB area,

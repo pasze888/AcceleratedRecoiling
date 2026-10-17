@@ -1,7 +1,6 @@
 package com.wiyuka.acceleratedrecoiling.natives.realtime.movement;
 
 import java.util.AbstractList;
-import java.util.Arrays;
 import java.util.Objects;
 import java.util.Optional;
 import net.minecraft.core.BlockPos;
@@ -133,52 +132,6 @@ public final class FullBlockCollisions extends AbstractList<VoxelShape> {
 
     private static boolean overlaps(double min, double max, int blockMin) {
         return min + EPSILON < blockMin + 1.0 && max - EPSILON >= blockMin;
-    }
-
-    public float[] stepHeights(AABB box, float maxHeight, float skippedHeight) {
-        int remainingSurfaces = surfaceMask();
-        float[] heights = new float[Integer.bitCount(remainingSurfaces)];
-        int count = 0;
-
-        while (remainingSurfaces != 0) {
-            int localY = Integer.numberOfTrailingZeros(remainingSurfaces);
-            remainingSurfaces &= remainingSurfaces - 1;
-
-            float height = (float) (grid.minY + (double) localY - box.minY);
-            if (height < 0.0f || height == skippedHeight) {
-                continue;
-            }
-            if (height > maxHeight) {
-                break;
-            }
-            if (count > 0 && Float.compare(height, heights[count - 1]) == 0) {
-                continue;
-            }
-
-            heights[count++] = height;
-        }
-
-        return count == heights.length ? heights : Arrays.copyOf(heights, count);
-    }
-
-    private int surfaceMask() {
-        long occupiedRows = 0;
-        for (long layer : collisionLayers) {
-            occupiedRows |= layer;
-        }
-
-        int surfaceMask = 0;
-        long rowMask = (1L << FullBlockGrid.EDGE) - 1;
-        for (int localY = 0; localY < FullBlockGrid.EDGE; localY++) {
-            if ((occupiedRows & rowMask) != 0) {
-                int bottomFace = 1 << localY;
-                int topFace = 1 << (localY + 1);
-                surfaceMask |= bottomFace | topFace;
-            }
-            occupiedRows >>>= FullBlockGrid.EDGE;
-        }
-
-        return surfaceMask;
     }
 
     public Optional<BlockPos> supportingBlock(Vec3 position) {

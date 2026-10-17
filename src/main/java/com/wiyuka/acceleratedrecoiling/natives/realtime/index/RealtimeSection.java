@@ -54,16 +54,12 @@ public final class RealtimeSection {
             nonSoft++;
         }
 
-        if (shouldRebuildView(object)) {
+        if (!(object instanceof Entity entity) || dirty || !view.canAdd()) {
             dirty = true;
             return;
         }
 
-        view.add(this, (Entity) object);
-    }
-
-    private boolean shouldRebuildView(Object object) {
-        return !(object instanceof Entity) || dirty || !view.canAdd();
+        view.add(this, entity);
     }
 
     public void removed(Object entity) {

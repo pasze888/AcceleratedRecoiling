@@ -61,7 +61,9 @@ public final class BlockCollisionCache {
         boolean canReuse(Level level,
                 int queryMinX, int queryMinY, int queryMinZ,
                 int queryMaxX, int queryMaxY, int queryMaxZ) {
-            if (!matchesBounds(queryMinX, queryMinY, queryMinZ, queryMaxX, queryMaxY, queryMaxZ)) {
+            if (minX != queryMinX || maxX != queryMaxX
+                    || minY != queryMinY || maxY != queryMaxY
+                    || minZ != queryMinZ || maxZ != queryMaxZ) {
                 return false;
             }
 
@@ -72,14 +74,6 @@ public final class BlockCollisionCache {
             }
 
             return true;
-        }
-
-        private boolean matchesBounds(
-                int queryMinX, int queryMinY, int queryMinZ,
-                int queryMaxX, int queryMaxY, int queryMaxZ) {
-            return minX == queryMinX && maxX == queryMaxX
-                    && minY == queryMinY && maxY == queryMaxY
-                    && minZ == queryMinZ && maxZ == queryMaxZ;
         }
     }
 

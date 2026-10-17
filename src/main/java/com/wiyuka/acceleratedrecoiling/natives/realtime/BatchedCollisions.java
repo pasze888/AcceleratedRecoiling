@@ -24,15 +24,6 @@ import net.neoforged.neoforge.common.config.NeoForgeServerConfig;
 public final class BatchedCollisions {
     private static final int OUTPUT_FIELDS = 2;
 
-    private enum OutputField {
-        COLLISIONS,
-        PUSH_TARGETS;
-
-        int index(int entries) {
-            return ordinal() * entries;
-        }
-    }
-
     private BatchedCollisions() {
     }
 
@@ -213,8 +204,7 @@ public final class BatchedCollisions {
         }
 
         int count = crammingAttempted ? collisionCount : pushCount;
-        OutputField hits = crammingAttempted ? OutputField.COLLISIONS : OutputField.PUSH_TARGETS;
-        int offset = hits.index(frame.entryCount);
+        int offset = crammingAttempted ? 0 : frame.entryCount;
         for (int index = 0; index < count; index++) {
             Entity other = collisionTarget(frame, offset, index);
             source.doPush(other);
