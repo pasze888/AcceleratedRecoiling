@@ -5,11 +5,10 @@ import com.wiyuka.acceleratedrecoiling.mixin.RealtimeGetterAccess;
 import com.wiyuka.acceleratedrecoiling.natives.realtime.compat.BatchedRules;
 import com.wiyuka.acceleratedrecoiling.natives.realtime.index.IndexedEntity;
 import com.wiyuka.acceleratedrecoiling.natives.realtime.index.IndexedSection;
+import com.wiyuka.acceleratedrecoiling.natives.realtime.index.JavaQuery;
 import com.wiyuka.acceleratedrecoiling.natives.realtime.index.RealtimeSection;
 import com.wiyuka.acceleratedrecoiling.natives.realtime.movement.BlockCollisionCache;
 import java.lang.ref.Reference;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import net.minecraft.server.level.ServerLevel;
@@ -24,21 +23,14 @@ import net.minecraft.world.phys.AABB;
 import net.neoforged.neoforge.common.config.NeoForgeServerConfig;
 
 public final class BatchedCollisions {
-    private static final int SECTION_ADDRESS_OFFSET = 0;
-    private static final int SECTION_COUNT_OFFSET = SECTION_ADDRESS_OFFSET + Long.BYTES;
-    private static final int SECTION_STRIDE_OFFSET = SECTION_COUNT_OFFSET + Integer.BYTES;
-    private static final int SECTION_SPATIAL_OFFSET = SECTION_STRIDE_OFFSET + Integer.BYTES;
-    private static final int SECTION_COINCIDENT_OFFSET = SECTION_SPATIAL_OFFSET + Long.BYTES;
-    private static final int SECTION_DESCRIPTOR_BYTES = SECTION_COINCIDENT_OFFSET + Long.BYTES;
-
-    private static final int OUTPUT_BYTES_PER_ENTRY = OutputField.values().length * Long.BYTES;
+    private static final int OUTPUT_FIELDS = 2;
 
     private enum OutputField {
         COLLISIONS,
         PUSH_TARGETS;
 
-        int byteOffset(int entries) {
-            return ordinal() * entries * Long.BYTES;
+        int index(int entries) {
+            return ordinal() * entries;
         }
     }
 
@@ -50,25 +42,17 @@ public final class BatchedCollisions {
     private static final class Frame {
         final ArrayList<RealtimeSection.View> sections = new ArrayList<>();
 
-        ByteBuffer sectionDescriptors = buffer(256);
-        ByteBuffer output = buffer(4096);
+        long[] output = new long[4096];
 
         int entryCount;
         int sourceSection;
 
         void ensureCapacity() {
-            if (sectionDescriptors.capacity() < (long) sections.size() * SECTION_DESCRIPTOR_BYTES) {
-                sectionDescriptors = buffer(Math.multiplyExact(sections.size(), SECTION_DESCRIPTOR_BYTES * 2));
-            }
-
-            if (output.capacity() < (long) entryCount * OUTPUT_BYTES_PER_ENTRY) {
-                output = buffer(Math.multiplyExact(entryCount, OUTPUT_BYTES_PER_ENTRY * 2));
+            int required = Math.multiplyExact(entryCount, OUTPUT_FIELDS);
+            if (output.length < required) {
+                output = new long[Math.multiplyExact(required, 2)];
             }
         }
-    }
-
-    private static ByteBuffer buffer(int bytes) {
-        return ByteBuffer.allocateDirect(bytes).order(ByteOrder.nativeOrder());
     }
 
     public static void clear() {
@@ -132,7 +116,7 @@ public final class BatchedCollisions {
             var bounds = source.getBoundingBox();
             if (!collectSections(frame, level, storage, bounds, epoch)) return false;
 
-            prepareSectionDescriptors(frame, source);
+            prepareSectionViews(frame, source);
             return queryAndPush(source, level, bounds, frame);
         } finally {
             Reference.reachabilityFence(frame.sections);
@@ -173,7 +157,7 @@ public final class BatchedCollisions {
         return supported[0];
     }
 
-    private static void prepareSectionDescriptors(Frame frame, LivingEntity source) {
+    private static void prepareSectionViews(Frame frame, LivingEntity source) {
         frame.ensureCapacity();
 
         var owner = ((IndexedEntity) source).ar$section();
@@ -181,18 +165,9 @@ public final class BatchedCollisions {
         frame.sourceSection = -1;
 
         for (int sectionIndex = 0; sectionIndex < frame.sections.size(); sectionIndex++) {
-            var section = frame.sections.get(sectionIndex);
-            if (section == sourceView) {
+            if (frame.sections.get(sectionIndex) == sourceView) {
                 frame.sourceSection = sectionIndex;
             }
-
-            int offset = sectionIndex * SECTION_DESCRIPTOR_BYTES;
-            frame.sectionDescriptors.putLong(offset + SECTION_ADDRESS_OFFSET, section.address);
-            frame.sectionDescriptors.putInt(offset + SECTION_COUNT_OFFSET, section.count());
-            frame.sectionDescriptors.putInt(offset + SECTION_STRIDE_OFFSET, section.stride);
-            frame.sectionDescriptors.putLong(offset + SECTION_SPATIAL_OFFSET, section.spatialAddress());
-            frame.sectionDescriptors.putLong(offset + SECTION_COINCIDENT_OFFSET,
-                    section.coincidentAddress(source.getX(), source.getZ()));
         }
     }
 
@@ -202,22 +177,22 @@ public final class BatchedCollisions {
                                         Frame frame) {
         IndexedEntity indexedSource = (IndexedEntity) source;
         int crammingLimit = level.getGameRules().get(GameRules.MAX_ENTITY_CRAMMING);
-        long counts = RealtimeNative.queryBatch(frame.sectionDescriptors, frame.sections.size(), frame.output, frame.sourceSection,
-                indexedSource.ar$sectionSlot(), source.getX(), source.getZ(),
+        long counts = JavaQuery.queryBatch(frame.sections, frame.sourceSection, indexedSource.ar$sectionSlot(),
+                source.getX(), source.getZ(),
                 bounds.minX, bounds.minY, bounds.minZ, bounds.maxX, bounds.maxY, bounds.maxZ,
-                crammingLimit > 0);
+                crammingLimit > 0, frame.entryCount, frame.output);
         if (counts == -1) {
             return false;
         }
 
         if (counts < 0) {
-            throw new IllegalStateException("Invalid native batch result: " + counts);
+            throw new IllegalStateException("Invalid batch result: " + counts);
         }
 
         int collisionCount = (int) (counts >>> Integer.SIZE);
         int pushCount = (int) counts;
         if (pushCount < 0 || pushCount > collisionCount || collisionCount > frame.entryCount) {
-            throw new IllegalStateException("Invalid native batch counts");
+            throw new IllegalStateException("Invalid batch counts");
         }
 
         Profiler.get().incrementCounter("getEntities");
@@ -241,7 +216,7 @@ public final class BatchedCollisions {
 
         int count = crammingAttempted ? collisionCount : pushCount;
         OutputField hits = crammingAttempted ? OutputField.COLLISIONS : OutputField.PUSH_TARGETS;
-        int offset = hits.byteOffset(frame.entryCount);
+        int offset = hits.index(frame.entryCount);
         for (int index = 0; index < count; index++) {
             Entity other = collisionTarget(frame, offset, index);
             source.doPush(other);
@@ -249,7 +224,7 @@ public final class BatchedCollisions {
     }
 
     private static Entity collisionTarget(Frame frame, int offset, int index) {
-        long hit = frame.output.getLong(offset + index * Long.BYTES);
+        long hit = frame.output[offset + index];
         int sectionIndex = (int) (hit >>> Integer.SIZE);
         int entitySlot = (int) hit;
         return frame.sections.get(sectionIndex).entities[entitySlot];

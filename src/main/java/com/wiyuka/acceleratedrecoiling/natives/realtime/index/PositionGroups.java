@@ -1,10 +1,7 @@
 package com.wiyuka.acceleratedrecoiling.natives.realtime.index;
 
-import com.wiyuka.acceleratedrecoiling.natives.realtime.RealtimeNative;
 import it.unimi.dsi.fastutil.HashCommon;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 
 final class PositionGroups {
     private static final int MIN_GROUP_SIZE = 32;
@@ -14,35 +11,33 @@ final class PositionGroups {
         double z;
         int memberCount;
         PositionGroup next;
-        ByteBuffer memberBitmap;
-        long memberBitmapAddress;
+        long[] memberBitmap;
     }
 
     private final PositionGroup[] entityGroups;
     private final Long2ObjectOpenHashMap<PositionGroup> groupsByHash = new Long2ObjectOpenHashMap<>();
-    private final int bytesPerBitmap;
+    private final int wordsPerBitmap;
     private final int bitmapBudget;
     private PositionGroup firstReusableGroup;
-    private int allocatedBitmapBytes;
+    private int allocatedBitmapWords;
 
     PositionGroups(int capacity, int bitmapBudget) {
         entityGroups = new PositionGroup[capacity];
-        int wordsPerBitmap = Math.addExact(capacity, Long.SIZE - 1) / Long.SIZE;
-        bytesPerBitmap = Math.multiplyExact(wordsPerBitmap, Long.BYTES);
+        wordsPerBitmap = Math.addExact(capacity, Long.SIZE - 1) / Long.SIZE;
         this.bitmapBudget = bitmapBudget;
     }
 
-    long coincidentAddress(double x, double z) {
+    long[] coincidentBitmap(double x, double z) {
         if (!Double.isFinite(x) || !Double.isFinite(z)) {
-            return 0;
+            return null;
         }
 
         PositionGroup group = findGroup(x, z);
         if (group == null || group.memberCount < MIN_GROUP_SIZE) {
-            return 0;
+            return null;
         }
 
-        return group.memberBitmapAddress;
+        return group.memberBitmap;
     }
 
     void update(int slot, double x, double z, boolean eligible) {
@@ -142,13 +137,12 @@ final class PositionGroups {
     }
 
     private void allocateGroupBitmap(PositionGroup group) {
-        if (allocatedBitmapBytes > bitmapBudget - bytesPerBitmap) {
+        if (allocatedBitmapWords + wordsPerBitmap > bitmapBudget) {
             return;
         }
 
-        group.memberBitmap = ByteBuffer.allocateDirect(bytesPerBitmap).order(ByteOrder.nativeOrder());
-        group.memberBitmapAddress = RealtimeNative.address(group.memberBitmap);
-        allocatedBitmapBytes += bytesPerBitmap;
+        group.memberBitmap = new long[wordsPerBitmap];
+        allocatedBitmapWords += wordsPerBitmap;
 
         for (int slot = 0; slot < entityGroups.length; slot++) {
             if (entityGroups[slot] == group) {
@@ -164,11 +158,12 @@ final class PositionGroups {
     }
 
     private static void setGroupMember(PositionGroup group, int slot, boolean set) {
-        int byteOffset = slot / Long.SIZE * Long.BYTES;
-        long bitMask = 1L << (slot % Long.SIZE);
-        long currentWord = group.memberBitmap.getLong(byteOffset);
-        long updatedWord = set ? currentWord | bitMask : currentWord & ~bitMask;
-
-        group.memberBitmap.putLong(byteOffset, updatedWord);
+        int word = slot >>> 6;
+        long bitMask = 1L << slot;
+        if (set) {
+            group.memberBitmap[word] |= bitMask;
+        } else {
+            group.memberBitmap[word] &= ~bitMask;
+        }
     }
 }

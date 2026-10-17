@@ -1,9 +1,6 @@
 package com.wiyuka.acceleratedrecoiling.natives.realtime.index;
 
-import com.wiyuka.acceleratedrecoiling.natives.realtime.RealtimeNative;
 import com.wiyuka.acceleratedrecoiling.natives.realtime.compat.BatchedRules;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.util.BitSet;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
@@ -118,13 +115,8 @@ public final class RealtimeSection {
             POS_Z,
             FLAGS;
 
-            int byteOffset(int stride, int slot) {
-                return (ordinal() * stride + slot) * Double.BYTES;
-            }
-
-            int quantizedByteOffset(int stride, int slot) {
-                int quantizedStart = ENTITY_FIELD_COUNT * stride * Double.BYTES;
-                return quantizedStart + (ordinal() * stride + slot) * Integer.BYTES;
+            int index(int stride, int slot) {
+                return ordinal() * stride + slot;
             }
 
             boolean isMinimumBound() {
@@ -140,10 +132,8 @@ public final class RealtimeSection {
 
         public final Entity[] entities;
         public final BlockPos sectionPosition;
-        public final long address;
         public final int stride;
-        private final ByteBuffer boxes;
-        private final boolean quantized;
+        private final double[] bounds;
         private final SpatialIndex spatial;
         private final BitSet stateChanges;
         private long policyEpoch = Long.MIN_VALUE;
@@ -151,15 +141,13 @@ public final class RealtimeSection {
         private int liveCount;
         private int pins;
 
-        private View(Entity[] entities, ByteBuffer boxes, int count, boolean quantized) {
+        private View(Entity[] entities, double[] bounds, int count) {
             this.entities = entities;
             this.sectionPosition = SectionPos.of(entities[0].blockPosition()).origin();
-            this.boxes = boxes;
-            this.address = RealtimeNative.address(boxes);
+            this.bounds = bounds;
             this.stride = entities.length;
             this.count = count;
             this.liveCount = count;
-            this.quantized = quantized;
             this.spatial = SpatialIndex.enabled(count)
                     ? new SpatialIndex(stride, sectionPosition)
                     : null;
@@ -189,16 +177,8 @@ public final class RealtimeSection {
                 entities[slot] = entity;
             }
 
-            boolean quantized = RealtimeNative.quantizeSection(entries.length);
-            int bytesPerEntity = ENTITY_FIELD_COUNT * Double.BYTES;
-            if (quantized) {
-                bytesPerEntity += BOUNDS_FIELDS.length * Integer.BYTES;
-            }
-
-            ByteBuffer boxes = ByteBuffer.allocateDirect(Math.multiplyExact(stride, bytesPerEntity))
-                    .order(ByteOrder.nativeOrder());
-
-            return new View(entities, boxes, entries.length, quantized);
+            double[] bounds = new double[Math.multiplyExact(stride, ENTITY_FIELD_COUNT)];
+            return new View(entities, bounds, entries.length);
         }
 
         private void initialize(RealtimeSection owner, View previous) {
@@ -221,9 +201,9 @@ public final class RealtimeSection {
                 writeBox(slot, entities[slot].getBoundingBox());
 
                 if (cached && !previous.stateChanges.get(oldSlot)) {
-                    double x = previous.boxes.getDouble(EntityField.POS_X.byteOffset(previous.stride, oldSlot));
-                    double z = previous.boxes.getDouble(EntityField.POS_Z.byteOffset(previous.stride, oldSlot));
-                    double flag = previous.boxes.getDouble(EntityField.FLAGS.byteOffset(previous.stride, oldSlot));
+                    double x = previous.bounds[EntityField.POS_X.index(previous.stride, oldSlot)];
+                    double z = previous.bounds[EntityField.POS_Z.index(previous.stride, oldSlot)];
+                    double flag = previous.bounds[EntityField.FLAGS.index(previous.stride, oldSlot)];
                     writeState(slot, x, z, flag);
                 } else {
                     stateDirty(slot);
@@ -235,12 +215,16 @@ public final class RealtimeSection {
             return count;
         }
 
-        public long spatialAddress() {
-            return spatial == null ? 0 : spatial.address();
+        double[] bounds() {
+            return bounds;
         }
 
-        public long coincidentAddress(double x, double z) {
-            return spatial == null ? 0 : spatial.coincidentAddress(x, z);
+        SpatialIndex spatial() {
+            return spatial;
+        }
+
+        long[] coincidentBitmap(double x, double z) {
+            return spatial == null ? null : spatial.coincidentBitmap(x, z);
         }
 
         public View retain() {
@@ -257,7 +241,6 @@ public final class RealtimeSection {
 
         private boolean canAdd() {
             return pins == 0 && count < stride
-                    && RealtimeNative.quantizeSection(count + 1) == quantized
                     && SpatialIndex.enabled(count + 1) == (spatial != null);
         }
 
@@ -320,9 +303,9 @@ public final class RealtimeSection {
         }
 
         private void writeState(int slot, double x, double z, double flag) {
-            boxes.putDouble(EntityField.POS_X.byteOffset(stride, slot), x);
-            boxes.putDouble(EntityField.POS_Z.byteOffset(stride, slot), z);
-            boxes.putDouble(EntityField.FLAGS.byteOffset(stride, slot), flag);
+            bounds[EntityField.POS_X.index(stride, slot)] = x;
+            bounds[EntityField.POS_Z.index(stride, slot)] = z;
+            bounds[EntityField.FLAGS.index(stride, slot)] = flag;
 
             if (spatial != null) {
                 spatial.updateState(slot, x, z, flag);
@@ -336,14 +319,7 @@ public final class RealtimeSection {
 
             for (EntityField field : BOUNDS_FIELDS) {
                 double emptyBound = field.isMinimumBound() ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY;
-                boxes.putDouble(field.byteOffset(stride, slot), emptyBound);
-            }
-
-            if (quantized) {
-                for (EntityField field : BOUNDS_FIELDS) {
-                    int emptyBound = field.isMinimumBound() ? Integer.MAX_VALUE : Integer.MIN_VALUE;
-                    boxes.putInt(field.quantizedByteOffset(stride, slot), emptyBound);
-                }
+                bounds[field.index(stride, slot)] = emptyBound;
             }
         }
 
@@ -354,38 +330,26 @@ public final class RealtimeSection {
             double maxX = box.maxX;
             double maxY = box.maxY;
             double maxZ = box.maxZ;
-            ByteBuffer buffer = boxes;
+            double[] planes = bounds;
 
-            buffer.putDouble(EntityField.BOUNDS_MIN_X.byteOffset(stride, slot), minX);
-            buffer.putDouble(EntityField.BOUNDS_MIN_Y.byteOffset(stride, slot), minY);
-            buffer.putDouble(EntityField.BOUNDS_MIN_Z.byteOffset(stride, slot), minZ);
-            buffer.putDouble(EntityField.BOUNDS_MAX_X.byteOffset(stride, slot), maxX);
-            buffer.putDouble(EntityField.BOUNDS_MAX_Y.byteOffset(stride, slot), maxY);
-            buffer.putDouble(EntityField.BOUNDS_MAX_Z.byteOffset(stride, slot), maxZ);
+            planes[EntityField.BOUNDS_MIN_X.index(stride, slot)] = minX;
+            planes[EntityField.BOUNDS_MIN_Y.index(stride, slot)] = minY;
+            planes[EntityField.BOUNDS_MIN_Z.index(stride, slot)] = minZ;
+            planes[EntityField.BOUNDS_MAX_X.index(stride, slot)] = maxX;
+            planes[EntityField.BOUNDS_MAX_Y.index(stride, slot)] = maxY;
+            planes[EntityField.BOUNDS_MAX_Z.index(stride, slot)] = maxZ;
 
-            if (quantized || spatial != null) {
+            if (spatial != null) {
                 boolean finite = Double.isFinite(minX) && Double.isFinite(minY) && Double.isFinite(minZ)
                         && Double.isFinite(maxX) && Double.isFinite(maxY) && Double.isFinite(maxZ);
-                int quantizedMinX = finite ? quantize(minX) : Integer.MIN_VALUE;
-                int quantizedMinY = finite ? quantize(minY) : Integer.MIN_VALUE;
-                int quantizedMinZ = finite ? quantize(minZ) : Integer.MIN_VALUE;
-                int quantizedMaxX = finite ? quantize(maxX) : Integer.MAX_VALUE;
-                int quantizedMaxY = finite ? quantize(maxY) : Integer.MAX_VALUE;
-                int quantizedMaxZ = finite ? quantize(maxZ) : Integer.MAX_VALUE;
-
-                if (quantized) {
-                    buffer.putInt(EntityField.BOUNDS_MIN_X.quantizedByteOffset(stride, slot), quantizedMinX);
-                    buffer.putInt(EntityField.BOUNDS_MIN_Y.quantizedByteOffset(stride, slot), quantizedMinY);
-                    buffer.putInt(EntityField.BOUNDS_MIN_Z.quantizedByteOffset(stride, slot), quantizedMinZ);
-                    buffer.putInt(EntityField.BOUNDS_MAX_X.quantizedByteOffset(stride, slot), quantizedMaxX);
-                    buffer.putInt(EntityField.BOUNDS_MAX_Y.quantizedByteOffset(stride, slot), quantizedMaxY);
-                    buffer.putInt(EntityField.BOUNDS_MAX_Z.quantizedByteOffset(stride, slot), quantizedMaxZ);
-                }
-
-                if (spatial != null) {
-                    spatial.updateBounds(slot, quantizedMinX, quantizedMinY, quantizedMinZ,
-                            quantizedMaxX, quantizedMaxY, quantizedMaxZ, finite);
-                }
+                spatial.updateBounds(slot,
+                        finite ? quantize(minX) : Integer.MIN_VALUE,
+                        finite ? quantize(minY) : Integer.MIN_VALUE,
+                        finite ? quantize(minZ) : Integer.MIN_VALUE,
+                        finite ? quantize(maxX) : Integer.MAX_VALUE,
+                        finite ? quantize(maxY) : Integer.MAX_VALUE,
+                        finite ? quantize(maxZ) : Integer.MAX_VALUE,
+                        finite);
             }
         }
 
